@@ -674,6 +674,13 @@ svc_rqst_rearm_events_locked(SVCXPRT *xprt, uint16_t ev_flags)
 	struct svc_rqst_rec *sr_rec = rec->ev_p;
 	int code = EINVAL;
 
+	if (!xprt->rearm_allowed) {
+		__warnx(TIRPC_DEBUG_FLAG_SVC_RQST,
+			"Failed to rearm as fd %d is suspended",
+			rec->xprt.xp_fd);
+		return 0;
+	}
+
 	XPRT_AUTO_TRACEPOINT(xprt, rearm, TRACE_DEBUG,
 		"Rearm. ev_flags: {}", ev_flags);
 
@@ -1804,6 +1811,66 @@ svc_rqst_delete_evchan(uint32_t chan_id)
 	ev_sig(sr_rec->sv[0], SVC_RQST_FLAG_SHUTDOWN);
 
 	svc_rqst_release(sr_rec);
+	return (code);
+}
+
+int svc_rqst_qos_suspend_socket(struct svc_xprt *xprt)
+{
+	struct rpc_dplx_rec *rec = REC_XPRT(xprt);
+	int fd = xprt->xp_fd;
+	int epollfd = rec->ev_p->ev_u.epoll.epoll_fd;
+	struct epoll_event *ev = rec->ev_p->ev_u.epoll.events;
+	int code = EINVAL;
+
+	rpc_dplx_rli(rec);
+
+	ev->events = EPOLLONESHOT | EPOLLOUT | EPOLLET;
+	code = epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, ev);
+
+	xprt->rearm_allowed = false;
+
+	rpc_dplx_rui(rec);
+
+	if (code) {
+		code = errno;
+		__warnx(TIRPC_DEBUG_FLAG_SVC_RQST,
+			"Failed to enable fd: %d events for EPOLLOUT",
+			fd);
+	} else {
+		__warnx(TIRPC_DEBUG_FLAG_SVC_RQST,
+			"Enabling fd: %d events for EPOLLOUT",
+			fd);
+	}
+	return (code);
+}
+
+int svc_rqst_qos_resume_socket(struct svc_xprt *xprt)
+{
+	struct rpc_dplx_rec *rec = REC_XPRT(xprt);
+	int fd = xprt->xp_fd;
+	int epollfd = rec->ev_p->ev_u.epoll.epoll_fd;
+	struct epoll_event *ev = rec->ev_p->ev_u.epoll.events;
+	int code = EINVAL;
+
+	rpc_dplx_rli(rec);
+
+	ev->events = EPOLLIN;
+	code = epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, ev);
+
+	xprt->rearm_allowed = true;
+
+	rpc_dplx_rui(rec);
+
+	if (code) {
+		code = errno;
+		__warnx(TIRPC_DEBUG_FLAG_SVC_RQST,
+			"Failed to enable fd: %d events for EPOLLIN",
+			fd);
+	} else {
+		__warnx(TIRPC_DEBUG_FLAG_SVC_RQST,
+			"Enabling fd: %d events for EPOLLIN",
+			fd);
+	}
 	return (code);
 }
 
